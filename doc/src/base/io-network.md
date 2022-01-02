@@ -72,6 +72,7 @@ Base.readuntil
 Base.readlines
 Base.eachline
 Base.displaysize
+Base.prompt
 ```
 
 ## [Multimedia I/O](@id Multimedia-I/O)
