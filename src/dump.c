@@ -1308,6 +1308,8 @@ static int64_t write_dependency_list(ios_t *s, jl_array_t **udepsp, jl_array_t *
 
 static jl_value_t *jl_deserialize_value(jl_serializer_state *s, jl_value_t **loc) JL_GC_DISABLED;
 
+static jl_method_t *jl_lookup_method(jl_methtable_t *mt, jl_datatype_t *sig, size_t world);
+
 static jl_value_t *jl_deserialize_datatype(jl_serializer_state *s, int pos, jl_value_t **loc) JL_GC_DISABLED
 {
     assert(pos == backref_list.len - 1 && "nothing should have been deserialized since assigning pos");
@@ -1624,6 +1626,12 @@ static jl_value_t *jl_deserialize_value_method_instance(jl_serializer_state *s, 
         if (nroots != 0) {
             jl_method_t *m = mi->def.method;
             assert(jl_is_method(m));
+            // Add roots to the "real" method, not the deserialized stub (this is most of what jl_recache_method does)
+            assert(!m->is_for_opaque_closure);
+            jl_datatype_t *sig = (jl_datatype_t*)m->sig;
+            jl_methtable_t *mt = jl_method_get_table(m);
+            assert((jl_value_t*)mt != jl_nothing);
+            m = jl_lookup_method(mt, sig, m->module->primary_world);
             jl_printf(JL_STDOUT, "Deserializing %d new roots for ", nroots);
             jl_(m);
             if (!m->roots) {
@@ -2575,7 +2583,7 @@ static jl_datatype_t *recache_datatype(jl_datatype_t *dt) JL_GC_DISABLED
 
 static void jl_recache_types(void) JL_GC_DISABLED
 {
-    size_t i;
+    size_t i, ins;
     // first rewrite all the unique'd objects
     for (i = 0; i < flagref_list.len; i += 2) {
         jl_value_t **loc = (jl_value_t**)flagref_list.items[i + 0];
@@ -2621,22 +2629,21 @@ static void jl_recache_types(void) JL_GC_DISABLED
         }
     }
     // then do a cleanup pass to drop these from future iterations of flagref_list
-    i = 0;
-    while (i < flagref_list.len) {
+    i = ins = 0;
+    size_t len = flagref_list.len;
+    while (i < len) {
         jl_value_t **loc = (jl_value_t**)flagref_list.items[i + 0];
         int offs = (int)(intptr_t)flagref_list.items[i + 1];
         jl_value_t *o = loc ? *loc : (jl_value_t*)backref_list.items[offs];
-        if (jl_is_method(o) || jl_is_method_instance(o)) {
-            i += 2;
+        if (jl_is_method(o) || jl_is_method_instance(o)) {  // keep for later
+            flagref_list.items[ins++] = loc;
+            flagref_list.items[ins++] = (void*)(intptr_t)offs;
         }
         else {
             // delete this item from the flagref list, so it won't be re-encountered later
             flagref_list.len -= 2;
-            if (i >= flagref_list.len)
-                break;
-            flagref_list.items[i + 0] = flagref_list.items[flagref_list.len + 0];
-            flagref_list.items[i + 1] = flagref_list.items[flagref_list.len + 1];
         }
+        i += 2;
     }
 }
 
