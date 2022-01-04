@@ -332,6 +332,21 @@ const CONVERSION_TRANSLATIONS = IdDict{Type, Any}(
     Time => (Hour, Minute, Second, Millisecond, Microsecond, Nanosecond, AMPM),
 )
 
+# The `DateFormat(format, locale)` method just below consumes the following Regex.
+# Constructing this Regex is fairly expensive; doing so in the method itself can
+# consume half or better of `DateFormat(format, locale)`'s runtime. So instead we
+# construct and cache it outside the method body. Note, however, that when
+# `keys(CONVERSION_SPECIFIERS)` changes, the cached Regex must be updated
+# accordingly; hence the Ref-ness of the cache, the helper method with which
+# to populate the cache, and cache of the hash of `keys(CONVERSION_SPECIFIERS)`
+# to facilitate checking for changes.
+function compute_dateformat_regex(conversion_specifiers)
+    letters = String(collect(keys(conversion_specifiers)))
+    return Regex("(?<!\\\\)([\\Q$letters\\E])\\1*")
+end
+const DATEFORMAT_REGEX_CACHE = Ref(compute_dateformat_regex(CONVERSION_SPECIFIERS))
+const CONVERSION_SPECIFIERS_KEYS_HASH = Ref(hash(keys(CONVERSION_SPECIFIERS)))
+
 """
     DateFormat(format::AbstractString, locale="english") -> DateFormat
 
@@ -379,8 +394,15 @@ function DateFormat(f::AbstractString, locale::DateLocale=ENGLISH)
     prev = ()
     prev_offset = 1
 
-    letters = String(collect(keys(CONVERSION_SPECIFIERS)))
-    for m in eachmatch(Regex("(?<!\\\\)([\\Q$letters\\E])\\1*"), f)
+    # To understand this block, please see the comments attached to the
+    # definitions of DATEFORMAT_REGEX_CACHE and CONVERSION_SPECIFIERS_KEYS_HASH above.
+    conversion_specifiers_keys_hash = hash(keys(CONVERSION_SPECIFIERS))
+    if conversion_specifiers_keys_hash != CONVERSION_SPECIFIERS_KEYS_HASH[]
+        DATEFORMAT_REGEX_CACHE[] = compute_dateformat_regex(CONVERSION_SPECIFIERS)
+        CONVERSION_SPECIFIERS_KEYS_HASH[] = conversion_specifiers_keys_hash
+    end
+
+    for m in eachmatch(DATEFORMAT_REGEX_CACHE[], f)
         tran = replace(f[prev_offset:prevind(f, m.offset)], r"\\(.)" => s"\1")
 
         if !isempty(prev)
